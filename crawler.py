@@ -24,6 +24,12 @@ class BaseSpider:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
                           "Chrome/122.0.0.0 Safari/537.36"
         }
+        self.stats = {
+            "total": 0,
+            "success": 0,
+            "failed": 0,
+            "fail_details": []  # 存储 (id/name, reason)
+        }
 
     @property
     def item_name(self):
@@ -130,7 +136,12 @@ class CommonSpider(BaseSpider):
                     if save_data is not None:
                         await self.save_queue.put(save_data)
                         print(f"⏳ 成功解析 {self.item_name}, ID: {quest_id}")
+                    else:
+                        self.stats["failed"] += 1
+                        self.stats["fail_details"].append((quest_id, "解析结果为空 (可能是被过滤了)"))
             except Exception as e:
+                self.stats["failed"] += 1
+                self.stats["fail_details"].append((quest_id, f"解析异常: {str(e)}"))
                 print(f"❌ 解析 {self.item_name} 失败, ID:{quest_id}]: {str(e)}")
             finally:
                 self.response_queue.task_done()
@@ -140,7 +151,13 @@ class CommonSpider(BaseSpider):
         while True:
             data = await self.save_queue.get()
             try:
-                filepath = self.output_dir / f'{data['save_name']}.txt'
+                ext_str = f".{data.get('ext')}" if data.get('ext') else ".md"
+                if 'sub_dir' in data and data['sub_dir']:
+                    target_dir = self.output_dir / data['sub_dir']
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    filepath = target_dir / f'{data["save_name"]}{ext_str}'
+                else:
+                    filepath = self.output_dir / f'{data["save_name"]}{ext_str}'
 
                 if filepath.exists() and self.remove_duplicate_name:
                     print(f"⚠️ 文件 {filepath} 已存在，删除本条目")
@@ -153,9 +170,12 @@ class CommonSpider(BaseSpider):
                         counter += 1
                     async with aiofiles.open(filepath, "w", encoding="utf-8") as f:
                         await f.write(data["content"])
+                        self.stats["success"] += 1
                         print(f"💾 保存 {self.item_name} 成功: {filepath.name}")
 
             except Exception as e:
+                self.stats["failed"] += 1
+                self.stats["fail_details"].append((data.get("save_name", "未知"), f"保存异常: {str(e)}"))
                 print(f"🚨 保存 {self.item_name} 失败: {str(e)}")
             finally:
                 self.save_queue.task_done()
@@ -168,7 +188,12 @@ class CommonSpider(BaseSpider):
             if data:
                 await self.response_queue.put((quest_id, data))
                 print(f"⏳ 成功爬取 {self.item_name}: {quest_id}")
+            else:
+                self.stats["failed"] += 1
+                self.stats["fail_details"].append((quest_id, "请求返回数据为空"))
         except Exception as e:
+            self.stats["failed"] += 1
+            self.stats["fail_details"].append((quest_id, f"请求异常: {str(e)}"))
             print(f"❌ 爬取 {self.item_name} 失败 [URL: {url}]: {str(e)}")
 
     async def worker(self):
@@ -191,9 +216,9 @@ class CommonSpider(BaseSpider):
         parse_workers = [asyncio.create_task(self.parse_worker())
                          for _ in range(self.concurrency * 2)]
 
-        # 执行爬取任务
         # 获取有效任务ID列表
         valid_ids = await self.fetch_valid_ids(self.id_url)
+        self.stats["total"] = len(valid_ids)
         if not valid_ids:
             print(f"🛑 条目{self.item_name}未找到有效任务ID")
             await self.close_session()

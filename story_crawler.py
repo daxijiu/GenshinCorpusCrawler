@@ -34,14 +34,22 @@ class StorySpider(CommonSpider):
 
     async def parse_response(self, quest_json):
         """异步解析任务数据， 执行解析，并返回解析结果"""
-        chapter_num, chapter_title, parsed_text = parse_story_data(quest_json)
-        if chapter_num is None:
+        result = parse_story_data(quest_json)
+        if result is None or result[0] is None:
             return None
+            
+        chapter_num, chapter_title, parsed_text, quest_type, quest_id = result
 
-        safe_name = await sanitize_filename(f"{chapter_num} {chapter_title}")
+        if chapter_num is None:
+            chapter_num = ""
+
+        raw_name = f"[{quest_id}] {chapter_num} {chapter_title}".replace('  ', ' ').strip()
+        safe_name = await sanitize_filename(raw_name)
         save_data = {
             "save_name": safe_name,
-            "content": parsed_text
+            "content": parsed_text,
+            "sub_dir": quest_type,
+            "ext": "md"
         }
         return save_data
 

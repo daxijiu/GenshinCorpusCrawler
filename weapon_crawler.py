@@ -51,7 +51,8 @@ class WeaponSpider(CommonSpider):
             data = await self.fetch(url)
             story = await self.fetch(affix_text_url)
             if data and data.get('data', None):
-                data['data']["story"] = story['data']
+                # 只有当获取到了故事数据时才进行赋值
+                data['data']["story"] = story.get('data') if story else "暂无故事"
                 await self.response_queue.put((quest_id, data))
                 print(f"⏳ 成功爬取: {quest_id}")
         except Exception as e:

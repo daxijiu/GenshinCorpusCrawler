@@ -7,6 +7,8 @@
 import asyncio
 import argparse
 import time
+from pathlib import Path
+from datetime import datetime
 
 from book_crawler import BookSpider
 from food_crawler import FoodSpider
@@ -82,55 +84,99 @@ args = parser.parse_args()
 
 async def main():
     tasks = []
+    spiders = []
     if args.artifact == "true":
         spider = ArtifactSpider(
             **task_dic["artifact"], output_dir=f"{args.output_dir}/artifact",
             concurrency=args.concurrency, timeout=args.timeout, write_workers=args.write_workers
         )
+        spiders.append(spider)
         tasks.append(spider.run())
     if args.material == "true":
         spider = MaterialSpider(
             **task_dic["material"], output_dir=f"{args.output_dir}/material",
             concurrency=args.concurrency, timeout=args.timeout, write_workers=args.write_workers
         )
+        spiders.append(spider)
         tasks.append(spider.run())
     if args.monster == "true":
         spider = MonsterSpider(
             **task_dic["monster"], output_dir=f"{args.output_dir}/monster",
             concurrency=args.concurrency, timeout=args.timeout, write_workers=args.write_workers
         )
+        spiders.append(spider)
         tasks.append(spider.run())
     if args.character == "true":
         spider = CharacterSpider(
             **task_dic["character"], output_dir=f"{args.output_dir}/character",
             concurrency=args.concurrency, timeout=args.timeout, write_workers=args.write_workers
         )
+        spiders.append(spider)
         tasks.append(spider.run())
     if args.story == "true":
         spider = StorySpider(
             **task_dic["story"], output_dir=f"{args.output_dir}/story",
             concurrency=args.concurrency, timeout=args.timeout, write_workers=args.write_workers
         )
+        spiders.append(spider)
         tasks.append(spider.run())
     if args.book == "true":
         spider = BookSpider(
             **task_dic['book'], output_dir=f"{args.output_dir}/book",
             concurrency=args.concurrency, timeout=args.timeout, write_workers=args.write_workers
         )
+        spiders.append(spider)
         tasks.append(spider.run())
     if args.weapon == 'true':
         spider = WeaponSpider(
             **task_dic['weapon'], output_dir=f"{args.output_dir}/weapon",
             concurrency=args.concurrency, timeout=args.timeout, write_workers=args.write_workers
         )
+        spiders.append(spider)
         tasks.append(spider.run())
     if args.food == 'true':
         spider = FoodSpider(
             **task_dic['food'], output_dir=f"{args.output_dir}/food",
             concurrency=args.concurrency, timeout=args.timeout, write_workers=args.write_workers
         )
+        spiders.append(spider)
         tasks.append(spider.run())
     await asyncio.gather(*tasks, return_exceptions=True)
+
+    # --- 统计与日志输出 ---
+    total_scanned = sum(s.stats["total"] for s in spiders)
+    total_success = sum(s.stats["success"] for s in spiders)
+    total_failed = sum(s.stats["failed"] for s in spiders)
+    
+    log_file = Path("crawl_report.log")
+    try:
+        with open(log_file, "w", encoding="utf-8") as f:
+            f.write(f"=== 爬虫运行总结报告 ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}) ===\n")
+            f.write(f"总计扫描 ID 数: {total_scanned}\n")
+            f.write(f"成功导出文件: {total_success}\n")
+            f.write(f"失败条目总数: {total_failed}\n")
+            f.write("-" * 50 + "\n\n")
+            
+            for s in spiders:
+                f.write(f"模块: {s.item_name}\n")
+                f.write(f"  - 扫描: {s.stats['total']}\n")
+                f.write(f"  - 成功: {s.stats['success']}\n")
+                f.write(f"  - 失败: {s.stats['failed']}\n")
+                if s.stats["failed"] > 0:
+                    f.write("  - 失败详情:\n")
+                    for fail_id, reason in s.stats["fail_details"]:
+                        f.write(f"    [!] ID/Name: {fail_id} | 原因: {reason}\n")
+                f.write("\n")
+    except Exception as e:
+        print(f"🚨 写入日志文件失败: {e}")
+
+    print(f"\n" + "="*30)
+    print(f"📊 爬虫运行总结:")
+    print(f"✅ 总成功: {total_success}")
+    print(f"❌ 总失败: {total_failed}")
+    if total_failed > 0:
+        print(f"📝 详细失败日志已保存至: {log_file.absolute()}")
+    print("="*30 + "\n")
 
 
 if __name__ == "__main__":

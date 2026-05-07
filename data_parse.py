@@ -23,8 +23,8 @@ def post_precess_text(text):
     text = re.sub(r'<[^>]+>', '', text)
     # 去掉花括号及其中的内容
     text = re.sub(r'{[^}]*}', '', text)
-    # 使用正则表达式去掉特殊字符 #$%&@
-    text = re.sub(r'[#$%&@]', '', text)
+    # 使用正则表达式去掉特殊字符 $%&@ (注意不能去掉#，否则会破坏markdown的标题)
+    text = re.sub(r'[$%&@]', '', text)
     # 将被转义的换行符还原
     text = text.replace('\\n', '\n')
     # 去掉可能留下的多余空格
@@ -92,55 +92,85 @@ def parse_story_data(story_json):
     """
 
     def process_task_data(task_data):
-        """处理单个任务数据块"""
+        """处理对话任务(taskData)"""
         lines = []
-        for task_id, task_item in sorted(task_data.get('items', {}).items(), key=lambda x: x[0]):
-            # 提取角色和所有对话文本
+        if not task_data:
+            return lines
+        items = task_data.get('items')
+        if not items:
+            return lines
+        for task_id, task_item in sorted(items.items(), key=lambda x: x[0]):
             if "player" in task_id:
-                # 跳过类似 "3071107-player" 的键值对
                 continue
             role = task_item.get('role', '未知角色')
             texts = [t.get('text', '') for t in task_item.get('text', [])]
             for text in texts:
-                if text:  # 过滤空文本
-                    # # 滤除颜色标签
-                    # text = remove_color_tags(text)
-                    lines.append(f"{role}: {text}")
+                if text:
+                    lines.append(f"**{role}**: {text}")
+        return lines
+
+    def process_narrator_data(narrator_data):
+        """处理旁白/气泡框对话(narratorData)"""
+        lines = []
+        if not narrator_data:
+            return lines
+        for narrator in narrator_data:
+            if not narrator:
+                continue
+            items = narrator.get('items')
+            if not items:
+                continue
+            for item in items:
+                role = item.get('role', '')
+                text = item.get('text', '')
+                if text:
+                    if role:
+                        lines.append(f"**{role}**: {text}")
+                    else:
+                        lines.append(f"{text}")
         return lines
 
     def process_scene(scene_data):
-        """处理单个场景"""
+        """处理单个小任务/场景"""
         output = []
-        if scene_data.get('taskData', None) is None:
-            # 只有当存在对话剧情时才添加到结果
-            return output
-
-        # 场景标题
-        scene_title = scene_data.get('title', '未命名场景')
-
-        if scene_title is not None and not contains_hidden_substring(scene_title):
-            # 如果标题中带有 $HIDDEN 则跳过该标题
-            output.append(f"\n\n{scene_title}")
-
-        # 处理任务数据
-        assert len(scene_data.get('tasks', [1])) == 1
-        task_lines = process_task_data(scene_data['taskData'][0])
-        output.extend(task_lines)
+        has_task = scene_data.get('taskData') is not None
+        has_narrator = scene_data.get('narratorData') is not None
+        
+        # 提取标题
+        scene_title = scene_data.get('title')
+        is_hidden = scene_data.get('isHidden', False)
+        
+        if scene_title and not contains_hidden_substring(scene_title) and not is_hidden:
+            output.append(f"\n### {scene_title}\n")
+        
+        if has_task:
+            for t_data in scene_data['taskData']:
+                task_lines = process_task_data(t_data)
+                output.extend(task_lines)
+                
+        if has_narrator:
+            narrator_lines = process_narrator_data(scene_data['narratorData'])
+            output.extend(narrator_lines)
+            
         return output
 
     def process_act(act_data):
-        """处理单个章节"""
+        """处理大任务(Act)"""
         output = []
-        # Act信息
         act_info = act_data.get('info', {})
-        act_title = act_info.get('title', '未命名章节')
+        act_title = act_info.get('title', '未命名任务')
         act_desc = act_info.get('description', '')
-        output.append(f"\n\n{act_title}\n{act_desc}")
-
-        # 处理所有场景
+        
+        output.append(f"\n## {act_title}")
+        if act_desc:
+            output.append(f"> {act_desc}\n")
+            
         for scene_key in sorted(act_data.get('story', {}).keys(), key=int):
             scene_data = act_data['story'][scene_key]
-            output.extend(process_scene(scene_data))
+            scene_lines = process_scene(scene_data)
+            if scene_lines:
+                output.extend(scene_lines)
+                
         return output
 
     try:
@@ -148,29 +178,32 @@ def parse_story_data(story_json):
         base_info = story_json.get('data', {}).get('info', {})
         chapter_num = base_info.get('chapterNum', '未知章节')
         chapter_title = base_info.get('chapterTitle', '未命名章节')
+        quest_type = base_info.get('type', 'other')
+        quest_id = base_info.get('id', '')
 
         # 主数据结构
         main_data = story_json.get('data', {})
         story_list = main_data.get('storyList', {})
 
         # 生成文本
-        result = [f"{chapter_num} {chapter_title}"]
+        result = [f"# {chapter_num} {chapter_title}\n"]
 
         # 按Act顺序处理（排序保证0,1,2...）
         for act_key in sorted(story_list.keys(), key=int):
             act_data = story_list[act_key]
             result.extend(process_act(act_data))
 
-        parsed_text = '\n'.join(result).replace('\n\n', '\n')  # 清理多余空行
+        parsed_text = '\n'.join(result)
+        parsed_text = re.sub(r'\n{3,}', '\n\n', parsed_text) # 清理多余空行
         parsed_text = post_precess_text(parsed_text)
         parsed_text = replace_character_name(parsed_text, ['Traveler', "玩家"], news="旅行者(空)")
 
-        return chapter_num, chapter_title, parsed_text
+        return chapter_num, chapter_title, parsed_text, quest_type, quest_id
 
     except Exception as e:
         print(f"❌ 解析异常: {str(e)}")
         traceback.print_exc()
-        return None, None, None
+        return None, None, None, None, None
 
 
 def parse_weapon_data(weapon_json, exclude_story=False, item_zh_name="武器"):
@@ -183,6 +216,8 @@ def parse_weapon_data(weapon_json, exclude_story=False, item_zh_name="武器"):
     """
 
     def replace_pronoun_with_name(text, type_abbr, name):
+        if not text or not type_abbr:
+            return text
         # 构造正则表达式，匹配以这或此开头，后面跟一个可选的中文字符作为量词，然后是类型简称
         pattern = re.compile(r'([这此])([\u4e00-\u9fa5]?)' + re.escape(type_abbr))
         # 替换为指示代词 + 量词（如果有） + 给定的名称
@@ -196,14 +231,14 @@ def parse_weapon_data(weapon_json, exclude_story=False, item_zh_name="武器"):
         weapon_story = weapon_data.get("story", "暂无故事")
 
         # 将故事中的指代词全部替换为武器的名字，保证指代正确
-        if not exclude_story:
+        if not exclude_story and weapon_type:
             type_abbr = weapon_type[-1]  # 取最后一个字
             weapon_story = replace_pronoun_with_name(weapon_story, type_abbr, weapon_name)
 
         if not exclude_story:
-            output_text = f"{weapon_name} - {weapon_type}\n{weapon_description}\n{weapon_story}\n"
+            output_text = f"# {weapon_name} - {weapon_type}\n> {weapon_description}\n\n## 武器故事\n{weapon_story}\n"
         else:
-            output_text = f"{weapon_name} - {weapon_type}\n{weapon_description}\n"
+            output_text = f"# {weapon_name} - {weapon_type}\n> {weapon_description}\n"
         return weapon_name, post_precess_text(output_text)
 
     except Exception as e:
@@ -232,8 +267,9 @@ def parse_monster_data(monster_json):
             if isinstance(value, dict) and "reward" in value.keys() and value["reward"] is not None:
                 for reward, item in value.get("reward", {}).items():
                     rewards.add(item['name'])
-        reward_text = f"击杀「{monster_name}」奖励:" + ', '.join(rewards) if len(rewards) > 0 else ""
-        text = f"{monster_name} - {monster_type}\n{monster_desc}\n" + '\n'.join(monster_tips) + '\n' + reward_text
+        reward_text = "\n### 击杀奖励\n- " + '\n- '.join(rewards) if len(rewards) > 0 else ""
+        tips_text = "\n### 提示\n- " + '\n- '.join(monster_tips) if monster_tips else ""
+        text = f"# {monster_name} - {monster_type}\n> {monster_desc}\n" + tips_text + reward_text
 
         return monster_name, post_precess_text(text)
     except Exception as e:
@@ -249,15 +285,14 @@ def parse_material_data(material_json):
     """
 
     def process_dropped_by(additional_data, material_name):
-        if (dropped_data := additional_data.get('droppedBy', [])) is not None:
+        if (dropped_data := additional_data.get('droppedBy', [])) is not None and dropped_data:
             dropped_by = [v['name'] for v in dropped_data]
-            dropped_text = f"掉落「{material_name}」的怪物: " + ', '.join(dropped_by) if dropped_by is not None else ""
+            dropped_text = f"\n### 掉落来源\n- " + '\n- '.join(dropped_by)
             return dropped_text
-        else:
-            return ""
+        return ""
 
     def process_recipe(material_data, material_name):
-        if (recipe_data := material_data.get('recipe', None)) is not None:
+        if (recipe_data := material_data.get('recipe', None)) is not None and recipe_data:
             recipe_materials = set()
             for key, val in recipe_data.items():
                 txt = ""
@@ -267,13 +302,11 @@ def parse_material_data(material_json):
                     txt += f"{item['name']}×{item['count']}"
                 recipe_materials.add(txt)
 
-            return f"可通过以下材料换取「{material_name}」: " + ', '.join(
-                recipe_materials) if recipe_data is not None else ""
-        else:
-            return ""
+            return f"\n### 合成配方\n- " + '\n- '.join(recipe_materials)
+        return ""
 
     def process_required_by(additional_data, material_name):
-        if (required_data := additional_data.get('requiredBy', {})) is not None:
+        if (required_data := additional_data.get('requiredBy', {})) is not None and required_data:
             required_avatars = set()
             required_weapons = set()
             if "avatar" in required_data.keys():
@@ -281,13 +314,11 @@ def parse_material_data(material_json):
             if "weapon" in required_data.keys():
                 required_weapons.update([v['name'] for v in required_data.get('weapon', [])])
 
-            required_avatar_text = f"需求「{material_name}」的角色：" + ', '.join(required_avatars) \
-                if required_avatars else ""
-            required_weapon_text = f"需求「{material_name}」的武器: " + ', '.join(required_weapons) \
-                if required_weapons else ""
-            return required_avatar_text + '\n' + required_weapon_text
-        else:
-            return ""
+            required_avatar_text = f"- **需求角色**：{', '.join(required_avatars)}\n" if required_avatars else ""
+            required_weapon_text = f"- **需求武器**：{', '.join(required_weapons)}\n" if required_weapons else ""
+            if required_avatar_text or required_weapon_text:
+                return f"\n### 被需求于\n{required_avatar_text}{required_weapon_text}"
+        return ""
 
     try:
         material_data = material_json.get('data', {})
@@ -295,12 +326,14 @@ def parse_material_data(material_json):
         material_desc = material_data.get("description", "")
         material_type = material_data.get("type", "未知类型")
         source_text = process_source(material_data, material_name)
+        if source_text:
+            source_text = f"\n### 来源\n{source_text}\n"
         additions_data = material_data.get('additions', {})
         dropped_text = process_dropped_by(additions_data, material_name)
         required_text = process_required_by(additions_data, material_name)
         recipe_text = process_recipe(material_data, material_name)
-        output_text = (f"{material_name} - {material_type}\n{material_desc}\n\n{source_text}\n"
-                       f"{recipe_text}\n{dropped_text}\n{required_text}")
+        output_text = (f"# {material_name} - {material_type}\n> {material_desc}\n{source_text}"
+                       f"{recipe_text}{dropped_text}{required_text}")
 
         return material_name, post_precess_text(output_text)
     except Exception as e:
@@ -321,26 +354,26 @@ def parse_character_data(character_json, weapon_types: dict):
         character_zh_cv = cvs.get('CHS', '未知中文CV')
         character_en_cv = cvs.get('EN', "未知英文CV")
 
-        title_text = f"称号: {character_title}\n" if character_title is not None else ""
-        constellation_text = f"命之座: {character_constellation}\n" if character_constellation is not None else ""
-        native_text = f"所属: {character_native}\n" if character_native is not None else ""
-        detail_text = f"描述: {character_detail}\n" if character_detail is not None else ""
-        zh_cv_text = f"中文CV: {character_zh_cv}\n" if character_zh_cv is not None else ""
-        en_cv_text = f"英文CV: {character_en_cv}\n" if character_en_cv is not None else ""
-        fetter_text = title_text + constellation_text + native_text + detail_text + zh_cv_text + en_cv_text
+        title_text = f"- **称号**: {character_title}\n" if character_title else ""
+        constellation_text = f"- **命之座**: {character_constellation}\n" if character_constellation else ""
+        native_text = f"- **所属**: {character_native}\n" if character_native else ""
+        detail_text = f"- **描述**: {character_detail}\n" if character_detail else ""
+        zh_cv_text = f"- **中文CV**: {character_zh_cv}\n" if character_zh_cv else ""
+        en_cv_text = f"- **英文CV**: {character_en_cv}\n" if character_en_cv else ""
+        fetter_text = "## 角色详情\n" + title_text + constellation_text + native_text + detail_text + zh_cv_text + en_cv_text
         return fetter_text
 
     def process_birthday(birthday_data):
         if not birthday_data:
             return ""
         month, day = birthday_data
-        return f"生日: {month}月{day}日\n"
+        return f"- **生日**: {month}月{day}日\n"
 
     def process_story(story_data: dict):
-        story = ""
+        story = "## 角色故事\n\n"
         for k, v in story_data.items():
             if v['text'] != '暂未开放':
-                story += f"{v['title']}:\n {v['text']}\n\n"
+                story += f"### {v['title']}\n{v['text']}\n\n"
         return story
 
     try:
@@ -358,7 +391,7 @@ def parse_character_data(character_json, weapon_types: dict):
 
         character_story = process_story(character_data.get('story', {}))
 
-        output_text = f"{character_name} - {character_desc_text}\n{birthday_text}\n{fetter_text}\n\n{character_story}"
+        output_text = f"# {character_name} - {character_desc_text}\n\n{fetter_text}{birthday_text}\n{character_story}"
         return character_name, post_precess_text(output_text)
     except Exception as e:
         print(f"❌ 解析异常: {str(e)}")
@@ -370,15 +403,15 @@ def parse_food_data(food_json):
     def process_effect(effect_data, name):
         if not effect_data:
             return ""
-        effect_text = f"「{name}」效果: "
+        effect_text = f"\n### 效果\n"
         for k, v in effect_data.items():
-            effect_text += v
-        return effect_text + '\n'
+            effect_text += f"- {v}\n"
+        return effect_text
 
     def process_input_materials(input_data, name):
         if not input_data:
             return ""
-        text = f"「{name}」制作所需材料: "
+        text = f"\n### 配方\n- "
         materials = [f"{v['name']}×{v['count']}" for v in input_data.values()]
         return text + " + ".join(materials) + '\n' if materials else ""
     try:
@@ -396,9 +429,10 @@ def parse_food_data(food_json):
         else:
             effect_text, material_text = "", ""
         source_text = process_source(food_data, food_name)
+        if source_text:
+            source_text = f"\n### 来源\n{source_text}\n"
 
-        output_text = (f"{food_name} - {rank_text}\n"
-                       f"{food_desc}\n{source_text}\n{effect_text}{material_text}")
+        output_text = (f"# {food_name} - {rank_text}\n> {food_desc}\n{source_text}{effect_text}{material_text}")
         return food_name, post_precess_text(output_text)
 
     except Exception as e:

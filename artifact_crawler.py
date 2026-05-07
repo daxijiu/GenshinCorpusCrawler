@@ -68,24 +68,25 @@ class ArtifactSpider(BookSpider):
             try:
                 # 生成安全文件名
                 safe_name = await sanitize_filename(artifact_name)
-                filepath = self.output_dir / f"{safe_name}.txt"
+                filepath = self.output_dir / f"{safe_name}.md"
 
                 # 异步写入文件
                 async with aiofiles.open(filepath, 'w', encoding='utf-8') as f:
                     # 写入圣遗物/遗器标题
-                    await f.write(f"{artifact_name} - {artifact_data['level']}\n")
+                    await f.write(f"# {artifact_name} - {artifact_data['level']}\n\n")
 
                     # 写入套装效果
-                    await f.write(f"{artifact_data['affix']}\n")
+                    await f.write(f"### 套装效果\n{artifact_data['affix']}\n\n")
 
                     # 写入来源
-                    await f.write(artifact_data['source'] + '\n')
+                    if artifact_data['source']:
+                        await f.write(f"### 来源\n{artifact_data['source']}\n\n")
 
                     # 写入圣遗物的子件内容
+                    await f.write(f"## 套装组件\n")
                     for sub_item in artifact_data['volumes']:
-                        txt = (f"\n{sub_item['name']} - 套装子件\n{sub_item['description'].replace('\n', '')}\n"
+                        txt = (f"### {sub_item['name']}\n> {sub_item['description'].replace('\n', '')}\n\n"
                                f"{sub_item.get('content', '暂无内容').replace('\n\n', '\n')}\n")
-                        # txt = post_precess_text(txt)
                         await f.write(txt)
 
                     print(f"💾 保存成功, 文件名: {safe_name}")
